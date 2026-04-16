@@ -45,7 +45,7 @@
   <body>
     <div id="root"></div>
     <script type="text/babel" data-presets="react">
-      const { useState, useMemo } = React;
+      const { useState, useMemo, useEffect, useRef } = React;
 
 const ESPN = "https://a.espncdn.com/i/teamlogos/soccer/500/";
 const SXM_IMG = "https://imgsrv-prod.origin.streaming.siriusxm.com/";
@@ -163,7 +163,7 @@ const HOME_NAV_LEAGUES = [
   { abbr:"IndyCar", image:"if/19/196cfadec57933b180430d6f8703dd71_1748974171.png" },
   { abbr:"FIFA World Cup", image:"FIFA26.png" },
 ];
-const STATES = ["Upcoming","Live","Halftime","Extra Time","Full Time","Final"];
+const STATES = ["Upcoming","Pregame","Live","Halftime","Extra Time","Full Time","Final"];
 
 // ─── Utils ───────────────────────────────────────────────────────────────────
 function luma(hex="#111") {
@@ -200,7 +200,7 @@ function ensureDifferentIndex(nextIdx, otherIdx, total){
   return (nextIdx + 1) % total;
 }
 function normalizeClock(state, rawClock){
-  if(state === "Upcoming") return "";
+  if(state === "Upcoming" || state === "Pregame") return "";
   if(state === "Halftime") return "HT";
   if(state === "Full Time" || state === "Final") return "FT";
   return rawClock;
@@ -213,6 +213,62 @@ function assetUrl(path){
   if(/^https?:\/\//i.test(path) || /^data:/i.test(path)) return path;
   if(/^(aem|if)\//.test(path)) return sxmImageUrl(path);
   return path;
+}
+
+// ─── Score flip animation ─────────────────────────────────────────────────────
+// Renders a score digit. When isLive=true and value changes, plays the flip
+// animation: number collapses (scaleY→0), new value swaps in at the midpoint,
+// then springs back up with a gold glow burst.
+function ScoreFlip({ value, show, placeholder="", isLive, style }) {
+  const target = show ? value : placeholder;
+  const [display, setDisplay] = useState(target);
+  const [flipping, setFlipping] = useState(false);
+  const [glowing, setGlowing] = useState(false);
+  const prevValue = useRef(value);
+  const t1 = useRef(null);
+  const t2 = useRef(null);
+  const t3 = useRef(null);
+
+  useEffect(() => {
+    if (isLive && show && value !== prevValue.current) {
+      // kick off flip: collapse → swap value → expand
+      setFlipping(true);
+      setGlowing(false);
+      clearTimeout(t1.current);
+      clearTimeout(t2.current);
+      clearTimeout(t3.current);
+      t1.current = setTimeout(() => {
+        setDisplay(value);       // swap at collapse midpoint
+      }, 130);
+      t2.current = setTimeout(() => {
+        setFlipping(false);
+        setGlowing(true);        // glow on the way back up
+      }, 300);
+      t3.current = setTimeout(() => {
+        setGlowing(false);
+      }, 900);
+    } else {
+      setDisplay(target);
+    }
+    prevValue.current = value;
+    return () => {
+      clearTimeout(t1.current);
+      clearTimeout(t2.current);
+      clearTimeout(t3.current);
+    };
+  }, [value, show, isLive]);
+
+  const animStyle = flipping
+    ? { animation: "scoreFlip 0.3s cubic-bezier(0.4,0,0.2,1) forwards" }
+    : glowing
+    ? { animation: "scoreGlow 0.65s ease-out forwards" }
+    : {};
+
+  return (
+    <span style={{ ...style, display: "inline-block", ...animStyle }}>
+      {display}
+    </span>
+  );
 }
 
 // ─── Logo components ─────────────────────────────────────────────────────────
@@ -315,6 +371,7 @@ function InlineLogo({ team, isWC, size=24 }) {
 const SM={
   Live:        {bg:"rgba(239,68,68,0.2)",   border:"rgba(239,68,68,0.55)",   dot:"#ef4444"},
   Upcoming:    {bg:"rgba(99,102,241,0.18)", border:"rgba(99,102,241,0.5)",   dot:"#818cf8"},
+  Pregame:     {bg:"rgba(99,102,241,0.18)", border:"rgba(99,102,241,0.5)",   dot:"#818cf8"},
   Halftime:    {bg:"rgba(234,179,8,0.18)",  border:"rgba(234,179,8,0.5)",    dot:"#eab308"},
   "Extra Time":{bg:"rgba(234,179,8,0.18)",  border:"rgba(234,179,8,0.5)",    dot:"#eab308"},
   "Full Time": {bg:"rgba(34,197,94,0.18)",  border:"rgba(34,197,94,0.5)",    dot:"#22c55e"},
@@ -335,8 +392,8 @@ function StatePill({state}){
 
 // ─── Score Card ──────────────────────────────────────────────────────────────
 function ScoreCard({home,away,homeScore,awayScore,state,clock,league,isWC,leagueColor}){
-  const show=state!=="Upcoming";
-  const rightHeader = state==="Final" ? "FINAL" : state==="Full Time" ? "FT" : state==="Halftime" ? "HT" : state==="Extra Time" ? "ET" : "";
+  const show=state!=="Upcoming"&&state!=="Pregame";
+  const rightHeader = state==="Final" ? "FINAL" : state==="Full Time" ? "FT" : state==="Halftime" ? "HT" : state==="Extra Time" ? "ET" : state==="Pregame" ? "PRE" : "";
   const badgeFg = fg(leagueColor || "#111111");
   return (
     <div style={{borderRadius:26,border:"1px solid rgba(255,255,255,0.13)",
@@ -364,8 +421,10 @@ function ScoreCard({home,away,homeScore,awayScore,state,clock,league,isWC,league
         </div>
         <div style={{display:"flex",flexDirection:"column",alignItems:"center",gap:6,flexShrink:0,minWidth:120}}>
           <div style={{display:"flex",alignItems:"center",gap:80}}>
-            <span style={{fontSize:56,fontWeight:900,letterSpacing:"-0.04em",color:"#f8fafc",lineHeight:1,minWidth:28,textAlign:"center"}}>{show?homeScore:""}</span>
-            <span style={{fontSize:56,fontWeight:900,letterSpacing:"-0.04em",color:"#f8fafc",lineHeight:1,minWidth:28,textAlign:"center"}}>{show?awayScore:""}</span>
+            <ScoreFlip value={homeScore} show={show} isLive={state==="Live"}
+              style={{fontSize:56,fontWeight:900,letterSpacing:"-0.04em",color:"#f8fafc",lineHeight:1,minWidth:28,textAlign:"center"}}/>
+            <ScoreFlip value={awayScore} show={show} isLive={state==="Live"}
+              style={{fontSize:56,fontWeight:900,letterSpacing:"-0.04em",color:"#f8fafc",lineHeight:1,minWidth:28,textAlign:"center"}}/>
           </div>
           {state==="Live" && clock ? (
             <span style={{fontSize:14,fontWeight:800,color:"rgba(255,255,255,0.7)",letterSpacing:"0.04em",textTransform:"uppercase",textAlign:"center"}}>
@@ -559,11 +618,10 @@ function LiveScoreCard({ teamA, teamB, scoreA, scoreB, stateStr, clockStr, leagu
             lineHeight:1.25, whiteSpace:"nowrap",
           }}>{teamA.abbr}</span>
         </div>
-        <span style={{
-          fontSize:15, fontWeight:700, color:"#fff",
-          fontFamily:"'Helvetica Now Text','Helvetica Neue',Helvetica,sans-serif",
-          lineHeight:1.25,
-        }}>{showScore ? scoreA : ""}</span>
+        <ScoreFlip value={scoreA} show={showScore} isLive={stateStr==="LIVE"}
+          style={{fontSize:15,fontWeight:700,color:"#fff",
+            fontFamily:"'Helvetica Now Text','Helvetica Neue',Helvetica,sans-serif",
+            lineHeight:1.25}}/>
       </div>
 
       {/* Team B row */}
@@ -578,11 +636,10 @@ function LiveScoreCard({ teamA, teamB, scoreA, scoreB, stateStr, clockStr, leagu
             lineHeight:1.25, whiteSpace:"nowrap",
           }}>{teamB.abbr}</span>
         </div>
-        <span style={{
-          fontSize:15, fontWeight:700, color:"#fff",
-          fontFamily:"'Helvetica Now Text','Helvetica Neue',Helvetica,sans-serif",
-          lineHeight:1.25,
-        }}>{showScore ? scoreB : ""}</span>
+        <ScoreFlip value={scoreB} show={showScore} isLive={stateStr==="LIVE"}
+          style={{fontSize:15,fontWeight:700,color:"#fff",
+            fontFamily:"'Helvetica Now Text','Helvetica Neue',Helvetica,sans-serif",
+            lineHeight:1.25}}/>
       </div>
     </div>
   );
@@ -610,6 +667,7 @@ function MobileListView({teams, homeIdx, awayIdx, homeScore, awayScore, matchSta
     : matchState==="Live" ? "LIVE"
     : matchState==="Halftime" ? "HT"
     : matchState==="Extra Time" ? "ET"
+    : matchState==="Pregame" ? "PRE"
     : "TODAY";
 
   const clockStr = matchState==="Live" ? (clock || "") : stateStr==="TODAY" ? scheduledTime : "";
@@ -758,7 +816,7 @@ function MobileListView({teams, homeIdx, awayIdx, homeScore, awayScore, matchSta
           <div style={{height:58,borderRadius:8,background:"#1d2329",display:"flex",alignItems:"center",gap:10,padding:"0 10px",
             borderTop:"1px solid rgba(255,255,255,0.03)"}}>
             <div style={{width:42,height:42,borderRadius:4,overflow:"hidden",flexShrink:0}}>
-              <img src="https://is1-ssl.mzstatic.com/image/thumb/Podcasts221/v4/c6/02/8a/c6028ab7-bffd-db83-53e4-34a4ea9bef21/mza_16944101310108746053.jpg/600x600bb.jpg" alt="Grant's AirPods Pro" style={{width:"100%",height:"100%",objectFit:"cover",display:"block"}}/>
+              <img src="Conan.jpeg" alt="Grant's AirPods Pro" style={{width:"100%",height:"100%",objectFit:"cover",display:"block"}}/>
             </div>
             <div style={{minWidth:0,flex:1}}>
               <div style={{fontSize:11,fontWeight:700,color:"rgba(255,255,255,0.82)",lineHeight:1.15,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>
@@ -790,13 +848,15 @@ function MobileListView({teams, homeIdx, awayIdx, homeScore, awayScore, matchSta
 // ─── MOBILE VIEW 2: Single game detail ───────────────────────────────────────
 // ══════════════════════════════════════════════════════════════════════════════
 function MobileDetailView({home, away, homeScore, awayScore, matchState, clock, league, isWC, dateLabel, venue, coverageLabel, leagueColor}){
-  const show = matchState!=="Upcoming";
+  const show = matchState!=="Upcoming"&&matchState!=="Pregame";
   const isLive = matchState==="Live"||matchState==="Halftime"||matchState==="Extra Time";
   const periodLabel = matchState==="Live" ? (clock||"2H")
     : matchState==="Halftime" ? "HT"
     : matchState==="Extra Time" ? "ET"
     : matchState==="Full Time"||matchState==="Final" ? "FT"
-    : matchState==="Upcoming" ? "VS" : clock||"";
+    : matchState==="Upcoming" ? "VS"
+    : matchState==="Pregame" ? "PRE"
+    : clock||"";
 
   return (
     <div style={{overflowY:"auto",maxHeight:596}}>
@@ -851,13 +911,11 @@ function MobileDetailView({home, away, homeScore, awayScore, matchState, clock, 
             ))}
           </div>
           <div style={{display:"grid",gridTemplateColumns:"1fr auto 1fr",alignItems:"center",padding:"12px 16px",columnGap:14}}>
-            <span style={{fontSize:44,fontWeight:900,letterSpacing:"-0.04em",color:"#fff",lineHeight:1,textAlign:"center"}}>
-              {show ? homeScore : "—"}
-            </span>
+            <ScoreFlip value={homeScore} show={show} placeholder="—" isLive={matchState==="Live"}
+              style={{fontSize:44,fontWeight:900,letterSpacing:"-0.04em",color:"#fff",lineHeight:1,textAlign:"center",width:"100%"}}/>
             <span style={{fontSize:12,fontWeight:700,color:"rgba(255,255,255,0.45)",letterSpacing:"0.03em"}}>{periodLabel}</span>
-            <span style={{fontSize:44,fontWeight:900,letterSpacing:"-0.04em",color:"#fff",lineHeight:1,textAlign:"center"}}>
-              {show ? awayScore : "—"}
-            </span>
+            <ScoreFlip value={awayScore} show={show} placeholder="—" isLive={matchState==="Live"}
+              style={{fontSize:44,fontWeight:900,letterSpacing:"-0.04em",color:"#fff",lineHeight:1,textAlign:"center",width:"100%"}}/>
           </div>
         </div>
         <div style={{display:"flex",alignItems:"center",gap:8}}>
@@ -923,6 +981,7 @@ function MobileDiscoverView({home, away, homeScore, awayScore, matchState, leagu
     : matchState==="Live" ? "LIVE"
     : matchState==="Halftime" ? "HALFTIME"
     : matchState==="Extra Time" ? "EXTRA TIME"
+    : matchState==="Pregame" ? "PREGAME"
     : "UPCOMING";
   const sportsTileBg = `linear-gradient(105deg, ${home.color} 0%, ${home.color} 47%, ${away.color} 53%, ${away.color} 100%)`;
 
@@ -985,7 +1044,7 @@ function MobileDiscoverView({home, away, homeScore, awayScore, matchState, leagu
             <div style={{width:152,height:152,borderRadius:22,overflow:"hidden",position:"relative",marginBottom:8,
               background:"#1a1a1a"}}>
               <img
-                src="https://is1-ssl.mzstatic.com/image/thumb/Podcasts221/v4/c6/02/8a/c6028ab7-bffd-db83-53e4-34a4ea9bef21/mza_16944101310108746053.jpg/600x600bb.jpg"
+                src="Conan.jpeg"
                 alt="Conan O'Brien Needs a Friend"
                 style={{width:"100%",height:"100%",objectFit:"cover",display:"block"}}
               />
@@ -1041,6 +1100,7 @@ function MobileNowPlayingView({home, away, homeScore, awayScore, matchState, clo
     : matchState==="Halftime" ? "HT"
     : matchState==="Extra Time" ? "ET"
     : matchState==="Upcoming" ? "UP NEXT"
+    : matchState==="Pregame" ? "PREGAME"
     : "FINAL";
   return (
     <div style={{overflowY:"auto",maxHeight:596,
@@ -1064,7 +1124,8 @@ function MobileNowPlayingView({home, away, homeScore, awayScore, matchState, clo
             <TeamLogoAny team={home} isWC={isWC} size={68}/>
           </div>
           <div style={{fontSize:46,fontWeight:900,color:"#f8fafc",letterSpacing:"-0.05em",lineHeight:1}}>
-            {matchState==="Upcoming"?"—":homeScore}
+            <ScoreFlip value={homeScore} show={matchState!=="Upcoming"&&matchState!=="Pregame"} placeholder="—"
+              isLive={matchState==="Live"} style={{fontSize:46,fontWeight:900,color:"#f8fafc",letterSpacing:"-0.05em",lineHeight:1}}/>
           </div>
           <div style={{fontSize:14,color:"rgba(255,255,255,0.82)",textAlign:"center",maxWidth:104,lineHeight:1.15}}>{home.name}</div>
         </div>
@@ -1082,7 +1143,8 @@ function MobileNowPlayingView({home, away, homeScore, awayScore, matchState, clo
             <TeamLogoAny team={away} isWC={isWC} size={68}/>
           </div>
           <div style={{fontSize:46,fontWeight:900,color:"#f8fafc",letterSpacing:"-0.05em",lineHeight:1}}>
-            {matchState==="Upcoming"?"—":awayScore}
+            <ScoreFlip value={awayScore} show={matchState!=="Upcoming"&&matchState!=="Pregame"} placeholder="—"
+              isLive={matchState==="Live"} style={{fontSize:46,fontWeight:900,color:"#f8fafc",letterSpacing:"-0.05em",lineHeight:1}}/>
           </div>
           <div style={{fontSize:14,color:"rgba(255,255,255,0.82)",textAlign:"center",maxWidth:104,lineHeight:1.15}}>{away.name}</div>
         </div>
@@ -1309,6 +1371,7 @@ function App(){
   const [awayScore,setAwayScore]   = useState(1);
   const [matchState,setMatchState] = useState("Live");
   const [clock,setClock]           = useState("74'");
+  const [replayStage,setReplayStage] = useState(null);
   const [league,setLeague]         = useState(initialDataset.label);
   const [bgMode,setBgMode]         = useState("blend");
   const [customBg,setCustomBg]     = useState("#0f172a");
@@ -1327,7 +1390,22 @@ function App(){
   const safeHomeScore = clampScore(homeScore);
   const safeAwayScore = clampScore(awayScore);
   const normalizedClock = normalizeClock(matchState, clock);
-  const clockLocked = matchState === "Upcoming" || matchState === "Halftime" || matchState === "Full Time" || matchState === "Final";
+  const clockLocked = matchState === "Upcoming" || matchState === "Pregame" || matchState === "Halftime" || matchState === "Full Time" || matchState === "Final";
+
+  const REPLAY_STAGES = [
+    { label:"Scheduled", state:"Upcoming", hs:0, as_:0, clock:"" },
+    { label:"Pregame",   state:"Pregame",  hs:0, as_:0, clock:"" },
+    { label:"Live",      state:"Live",     hs:1, as_:0, clock:"67'" },
+    { label:"Final",     state:"Final",    hs:2, as_:1, clock:"" },
+  ];
+  function applyReplayStage(i){
+    const s = REPLAY_STAGES[i];
+    setReplayStage(i);
+    setMatchState(s.state);
+    setHomeScore(s.hs);
+    setAwayScore(s.as_);
+    setClock(s.clock);
+  }
 
   let stageBg;
   if(bgMode==="blend")      stageBg=`linear-gradient(135deg,${home.color}cc 0%,${away.color}cc 100%)`;
@@ -1381,6 +1459,20 @@ function App(){
         input:focus,select:focus{border-color:rgba(99,102,241,0.6)!important;box-shadow:0 0 0 2px rgba(99,102,241,0.15);}
         input[type=number]::-webkit-inner-spin-button{-webkit-appearance:none;}
         @keyframes pulse{0%,100%{opacity:1}50%{opacity:0.3}}
+        @keyframes scoreFlip{
+          0%  {transform:scaleY(1)   translateY(0);   opacity:1;}
+          28% {transform:scaleY(0.1) translateY(-8%); opacity:0;}
+          29% {transform:scaleY(0.1) translateY(8%);  opacity:0;}
+          72% {transform:scaleY(1.1) translateY(-2%); opacity:1;}
+          88% {transform:scaleY(0.97)translateY(1%);  opacity:1;}
+          100%{transform:scaleY(1)   translateY(0);   opacity:1;}
+        }
+        @keyframes scoreGlow{
+          0%  {filter:brightness(1)   drop-shadow(0 0 0px  rgba(251,191,36,0));}
+          20% {filter:brightness(1.4) drop-shadow(0 0 18px rgba(251,191,36,0.95));}
+          55% {filter:brightness(1.2) drop-shadow(0 0 10px rgba(251,191,36,0.55));}
+          100%{filter:brightness(1)   drop-shadow(0 0 0px  rgba(251,191,36,0));}
+        }
         @keyframes liveIconPulse{0%,100%{opacity:.65;transform:scale(.94)}50%{opacity:1;transform:scale(1)}}
         .chip:hover{transform:translateY(-3px);}
         .chip{transition:transform 0.12s,box-shadow 0.12s;}
@@ -1551,12 +1643,92 @@ function App(){
                     setHomeIdx(p.hi);setAwayIdx(p.ai);
                     setHomeScore(p.hs);setAwayScore(p.as_);
                     setMatchState(p.s);setClock(p.c);
+                    setReplayStage(null);
                   }} style={{background:"rgba(99,102,241,0.1)",border:"1px solid rgba(99,102,241,0.22)",
                     borderRadius:9,color:"#a5b4fc",cursor:"pointer",padding:"8px 11px",
                     fontSize:12,fontWeight:700,fontFamily:"inherit",textAlign:"left"}}>
                     {p.label}
                   </button>
                 ))}
+              </div>
+            </div>
+
+            {/* ── Replay Simulation ── */}
+            <div style={{borderTop:"1px solid rgba(255,255,255,0.06)",paddingTop:11}}>
+              <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:12}}>
+                <Label>Replay Simulation</Label>
+                {replayStage!==null&&(
+                  <button onClick={()=>setReplayStage(null)} style={{background:"none",border:"none",
+                    cursor:"pointer",fontSize:10,color:"#475569",padding:0,fontFamily:"inherit"}}>
+                    reset
+                  </button>
+                )}
+              </div>
+              {/* Stepper */}
+              <div style={{position:"relative"}}>
+                {/* Track */}
+                <div style={{position:"absolute",top:10,left:"calc(12.5% + 7px)",
+                  right:"calc(12.5% + 7px)",height:2,
+                  background:"rgba(255,255,255,0.08)",borderRadius:1}}/>
+                {/* Active fill */}
+                {replayStage!==null&&(
+                  <div style={{position:"absolute",top:10,left:"calc(12.5% + 7px)",
+                    width:`calc(${(replayStage/3)*100}% - ${(replayStage/3)*14}px)`,
+                    height:2,background:"#2563eb",borderRadius:1,transition:"width 0.3s ease"}}/>
+                )}
+                <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",position:"relative"}}>
+                  {REPLAY_STAGES.map((s,i)=>{
+                    const active = replayStage===i;
+                    const past   = replayStage!==null && i<replayStage;
+                    return (
+                      <button key={s.label} onClick={()=>applyReplayStage(i)} style={{
+                        background:"none",border:"none",cursor:"pointer",padding:"0 2px 0",
+                        display:"flex",flexDirection:"column",alignItems:"center",gap:5,
+                        fontFamily:"inherit",
+                      }}>
+                        <div style={{
+                          width:20,height:20,borderRadius:"50%",flexShrink:0,
+                          background: active?"#2563eb" : past?"#1d4ed8" : "rgba(255,255,255,0.06)",
+                          border:`2px solid ${active?"#60a5fa":past?"#3b82f6":"rgba(255,255,255,0.12)"}`,
+                          transition:"all 0.2s",display:"grid",placeItems:"center",
+                        }}>
+                          {(active||past)&&<div style={{width:6,height:6,borderRadius:"50%",background:"#fff"}}/>}
+                        </div>
+                        <span style={{
+                          fontSize:9,fontWeight:active?800:600,letterSpacing:"0.05em",
+                          textTransform:"uppercase",textAlign:"center",lineHeight:1.2,
+                          color:active?"#60a5fa":past?"#94a3b8":"#475569",
+                          transition:"color 0.2s",
+                        }}>{s.label}</span>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+              {/* Prev / Next */}
+              <div style={{display:"flex",gap:8,marginTop:10}}>
+                <button
+                  onClick={()=>replayStage>0&&applyReplayStage(replayStage-1)}
+                  disabled={replayStage===null||replayStage===0}
+                  style={{flex:1,background:"rgba(255,255,255,0.04)",
+                    border:"1px solid rgba(255,255,255,0.08)",borderRadius:9,
+                    color:replayStage===null||replayStage===0?"#334155":"#94a3b8",
+                    cursor:replayStage===null||replayStage===0?"not-allowed":"pointer",
+                    padding:"8px",fontSize:12,fontWeight:700,fontFamily:"inherit"}}>
+                  ← Back
+                </button>
+                <button
+                  onClick={()=>applyReplayStage(replayStage===null?0:Math.min(replayStage+1,REPLAY_STAGES.length-1))}
+                  disabled={replayStage===REPLAY_STAGES.length-1}
+                  style={{flex:1,
+                    background:replayStage===REPLAY_STAGES.length-1?"rgba(255,255,255,0.04)":"rgba(37,99,235,0.18)",
+                    border:`1px solid ${replayStage===REPLAY_STAGES.length-1?"rgba(255,255,255,0.08)":"rgba(37,99,235,0.45)"}`,
+                    borderRadius:9,
+                    color:replayStage===REPLAY_STAGES.length-1?"#334155":"#60a5fa",
+                    cursor:replayStage===REPLAY_STAGES.length-1?"not-allowed":"pointer",
+                    padding:"8px",fontSize:12,fontWeight:700,fontFamily:"inherit"}}>
+                  {replayStage===null?"Start Replay":"Next →"}
+                </button>
               </div>
             </div>
           </div>
